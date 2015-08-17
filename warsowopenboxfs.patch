@@ -1,0 +1,216 @@
+diff -ur warsow_1.0_sdk.orig//source/unix/unix_glw.c warsow_1.0_sdk.patched//source/unix/unix_glw.c
+--- warsow_1.0_sdk.orig//source/unix/unix_glw.c	2012-08-27 22:14:56.402307085 +0400
++++ warsow_1.0_sdk.patched//source/unix/unix_glw.c	2012-08-27 22:56:09.218910685 +0400
+@@ -659,18 +659,127 @@
+ 
+ 	memset(&xev, 0, sizeof(xev));
+ 	xev.type = ClientMessage;
++	xev.xany.type = ClientMessage;
+ 	xev.xclient.window = x11display.win;
+ 	xev.xclient.message_type = wm_state;
+ 	xev.xclient.format = 32;
+ 	xev.xclient.data.l[0] = fullscreen ? 1 : 0;
+ 	xev.xclient.data.l[1] = wm_fullscreen;
+-	xev.xclient.data.l[2] = 0;
++	xev.xclient.data.l[2] = 0l;
+ 
+ 	XSendEvent( x11display.dpy, DefaultRootWindow( x11display.dpy ), False,
+-		SubstructureNotifyMask, &xev );
++		SubstructureNotifyMask | SubstructureRedirectMask, &xev );
+ }
+ 
+ /*
++* _NETWM_CHECK_PING
++*
++* Checks if the _NET_WM_PING Atom is already present in WM_PROTOCOLS
++*/
++qboolean _NETWM_CHECK_PING( void )
++{
++    Status status;
++	qboolean present = qfalse;
++	Atom *atoms;
++	int num_atoms, i;
++
++	status = XGetWMProtocols( x11display.dpy, x11display.win, &atoms, &num_atoms );
++
++	if( status == 0 )
++		return qfalse;
++
++	for( i = 0; i < num_atoms; i++ )
++	{
++		if( atoms[i] == x11display.ping )
++		{
++			present = qtrue;
++			break;
++		}
++	}
++    XFree( atoms );
++    return present;
++}
++
++/*
++* _NETWM_SET_HINTS
++*
++* Sets informative hints defined in the ICCCM2/EWMH spec
++*/
++void _NETWM_SET_HINTS( void )
++{
++	Status status;
++	XTextProperty titleprop, iconprop, clientmachineprop;
++	char *title = "Warsow"; //FIXME: Shouldn't be hardcoded
++	char *icon_name = "warsow128x128.xpm"; //FIXME: Shouldn't be hardcoded
++    pid_t warsowpid; //FIXME: Does Warsow already know it's pid? Can it be retrieved from there?
++	char hostname[256]; //FIXME: Is it possible to get the hostname of the client from qcommon/net.c or somewhere else?
++    char* hostnamepointer = &hostname[0];
++
++    Atom CARDINAL;
++	Atom UTF8_STRING;
++
++    Atom NET_WM_PID;
++	Atom NET_WM_NAME;
++	Atom NET_WM_ICON_NAME;
++	Atom NET_WM_WINDOW_TYPE;
++	Atom NET_WM_WINDOW_TYPE_NORMAL;
++
++    Atom WM_PROTOCOLS;
++    Atom WM_CLIENT_MACHINE;
++
++    x11display.ping = XInternAtom( x11display.dpy, "_NET_WM_PING", False );
++
++	CARDINAL = XInternAtom( x11display.dpy, "CARDINAL", False );
++	UTF8_STRING = XInternAtom( x11display.dpy, "_UTF8_STRING", False );
++
++    NET_WM_PID = XInternAtom( x11display.dpy, "_NET_WM_PID", False );
++	NET_WM_NAME = XInternAtom( x11display.dpy, "_NET_WM_NAME", False );
++	NET_WM_ICON_NAME = XInternAtom( x11display.dpy, "_NET_WM_ICON_NAME", False );
++	NET_WM_WINDOW_TYPE = XInternAtom( x11display.dpy, "_NET_WM_WINDOW_TYPE", False );
++	NET_WM_WINDOW_TYPE_NORMAL = XInternAtom( x11display.dpy, "_NET_WM_WINDOW_TYPE_NORMAL", False );
++
++    WM_PROTOCOLS = XInternAtom( x11display.dpy, "WM_PROTOCOLS", False );
++    WM_CLIENT_MACHINE = XInternAtom( x11display.dpy, "WM_CLIENT_MACHINE", False );
++
++    warsowpid = getpid();
++
++    XChangeProperty( x11display.dpy, x11display.win, NET_WM_PID, CARDINAL, 32,
++        PropModeReplace,
++        (unsigned char *)&warsowpid, 1 );
++
++	status = XStringListToTextProperty( &title, 1, &titleprop );
++
++	if( status )
++		XSetTextProperty( x11display.dpy, x11display.win, &titleprop, NET_WM_NAME );
++
++	status = XStringListToTextProperty( &icon_name, 1, &iconprop );
++
++	if( status )
++		XSetTextProperty( x11display.dpy, x11display.win, &iconprop, NET_WM_ICON_NAME );
++
++	XChangeProperty( x11display.dpy, x11display.win, NET_WM_WINDOW_TYPE, XA_ATOM, 32,
++		PropModeReplace,
++		(unsigned char *)&NET_WM_WINDOW_TYPE_NORMAL, 1 );
++
++	if( gethostname( hostname, 256 ) == SOCKET_ERROR )
++        return;
++
++    status = XStringListToTextProperty( &hostnamepointer, 1, &clientmachineprop );
++
++    if( status )
++        XSetWMClientMachine( x11display.dpy, x11display.win, &clientmachineprop );
++    else
++        return;
++
++    if( !_NETWM_CHECK_PING() ) {
++        XChangeProperty( x11display.dpy, x11display.win, WM_PROTOCOLS, XA_ATOM, 32,
++            PropModeAppend,
++            (unsigned char *)&x11display.ping, 1 );
++    }
++}
++
++
++/*
+ * Sys_OpenURLInBrowser
+ */
+ void Sys_OpenURLInBrowser( const char *url )
+@@ -806,8 +915,15 @@
+ 
+ 		x11display.wa = wa;
+ 
+-		x11display.win = XCreateWindow( x11display.dpy, x11display.root, screen_x, screen_y, screen_width, screen_height,
++//		x11display.win = XCreateWindow( x11display.dpy, x11display.root, screen_x, screen_y, screen_width, screen_height,
++//			0, CopyFromParent, InputOutput, CopyFromParent, mask, &wa );
++		if( ( !x11display.win ) || !x11display.features.wmStateFullscreen ) {
++		    x11display.win = XCreateWindow( x11display.dpy, x11display.root, screen_x, screen_y, screen_width, screen_height,
+ 			0, CopyFromParent, InputOutput, CopyFromParent, mask, &wa );
++		    x11display.wmDeleteWindow = XInternAtom( x11display.dpy, "WM_DELETE_WINDOW", False );
++		    XSetWMProtocols( x11display.dpy, x11display.win, &x11display.wmDeleteWindow, 1 );
++           _NETWM_SET_HINTS();
++        }
+ 
+ 		XResizeWindow( x11display.dpy, x11display.gl_win, width, height );
+ 		XReparentWindow( x11display.dpy, x11display.gl_win, x11display.win, ( screen_width/2 )-( width/2 ),
+@@ -844,10 +960,17 @@
+ 		mask = CWBackPixel | CWBorderPixel | CWEventMask;
+ 		x11display.wa = wa;
+ 
+-		x11display.win = XCreateWindow( x11display.dpy, x11display.root, 0, 0, screen_width, screen_height,
++//		x11display.win = XCreateWindow( x11display.dpy, x11display.root, 0, 0, screen_width, screen_height,
++//			0, CopyFromParent, InputOutput, CopyFromParent, mask, &wa );
++//		x11display.wmDeleteWindow = XInternAtom( x11display.dpy, "WM_DELETE_WINDOW", False );
++//		XSetWMProtocols( x11display.dpy, x11display.win, &x11display.wmDeleteWindow, 1 );
++		if( ( !x11display.win ) || !x11display.features.wmStateFullscreen ) {
++		    x11display.win = XCreateWindow( x11display.dpy, x11display.root, 0, 0, screen_width, screen_height,
+ 			0, CopyFromParent, InputOutput, CopyFromParent, mask, &wa );
+-		x11display.wmDeleteWindow = XInternAtom( x11display.dpy, "WM_DELETE_WINDOW", False );
+-		XSetWMProtocols( x11display.dpy, x11display.win, &x11display.wmDeleteWindow, 1 );
++		    x11display.wmDeleteWindow = XInternAtom( x11display.dpy, "WM_DELETE_WINDOW", False );
++		    XSetWMProtocols( x11display.dpy, x11display.win, &x11display.wmDeleteWindow, 1 );
++           _NETWM_SET_HINTS();
++        }
+ 
+ 		XResizeWindow( x11display.dpy, x11display.gl_win, width, height );
+ 		XReparentWindow( x11display.dpy, x11display.gl_win, x11display.win, 0, 0 );
+@@ -859,6 +982,8 @@
+ 
+ 		if( !x11display.features.wmStateFullscreen )
+ 			_x11_SetNoResize( x11display.win, width, height );
++		else
++			_NETWM_SET_FULLSCREEN( qfalse );
+ 
+ #ifdef _XRANDR_OVER_VIDMODE_
+ 		_xf86_XrandrSwitchBack();
+@@ -878,7 +1003,7 @@
+ 	x11display.win_width = width;
+ 	x11display.win_height = height;
+ 
+-	if( x11display.old_win )
++	if( x11display.old_win && !x11display.features.wmStateFullscreen )
+ 	{
+ 		XDestroyWindow( x11display.dpy, x11display.old_win );
+ 		x11display.old_win = 0;
+diff -ur warsow_1.0_sdk.orig//source/unix/unix_input.c warsow_1.0_sdk.patched//source/unix/unix_input.c
+--- warsow_1.0_sdk.orig//source/unix/unix_input.c	2012-08-27 22:14:56.398973769 +0400
++++ warsow_1.0_sdk.patched//source/unix/unix_input.c	2012-08-27 22:57:37.831763963 +0400
+@@ -963,6 +963,12 @@
+ 			case ClientMessage:
+ 				if( event.xclient.data.l[0] == x11display.wmDeleteWindow )
+ 					Cbuf_ExecuteText( EXEC_NOW, "quit" );
++				if( event.xclient.data.l[0] == x11display.ping )
++				{
++					event.xclient.window = x11display.root;
++					XSendEvent( x11display.dpy, x11display.root, False,
++						(SubstructureNotifyMask|SubstructureRedirectMask), &event );
++				}
+ 				break;
+ 
+ 			case MapNotify:
+diff -ur warsow_1.0_sdk.orig//source/unix/x11.h warsow_1.0_sdk.patched//source/unix/x11.h
+--- warsow_1.0_sdk.orig//source/unix/x11.h	2012-08-27 22:14:56.402307085 +0400
++++ warsow_1.0_sdk.patched//source/unix/x11.h	2012-08-27 22:58:25.714837891 +0400
+@@ -22,6 +22,7 @@
+ 	XIM im;
+ 	XIC ic;
+ 	Atom wmDeleteWindow;
++	Atom ping;
+ 
+ 	Atom wmState;
+ 	struct featureset_s {
